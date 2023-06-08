@@ -1,6 +1,6 @@
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use evdev::{Device, InputEvent, InputEventKind, Key};
-use notify_rust::{Notification, Timeout};
+use notify_rust::Notification;
 use signal_hook::consts::TERM_SIGNALS;
 use std::{
     io,
@@ -43,7 +43,7 @@ struct MacroBoard {
 }
 
 impl MacroBoard {
-    fn execute_script(&self, path: &Path) -> io::Result<Child> {
+    fn execute_script(&self, path: &Path) -> io::Result<()> {
         eprintln!("Running macro: {path}", path = path.display());
 
         let old_euid = users::get_effective_uid();
@@ -53,9 +53,19 @@ impl MacroBoard {
 
         let result = Command::new(path).stdin(Stdio::null()).spawn();
 
-        users::switch::set_effective_uid(old_euid).ok();
-        users::switch::set_effective_gid(old_egid).ok();
-        result
+        users::switch::set_effective_uid(old_euid).unwrap();
+        users::switch::set_effective_gid(old_egid).unwrap();
+
+        result.map(|mut child| {
+            std::thread::spawn(move || {
+                // We need to wait for our child process to finish,
+                // Otherwise we're leaving defunct zombie processes behind.
+                //
+                // See: https://doc.rust-lang.org/std/process/struct.Child.html
+                child.wait().ok();
+            });
+            ()
+        })
     }
 
     fn run_macro(&self, macro_name: &str) -> Result<(), Box<dyn std::error::Error>> {
