@@ -43,7 +43,7 @@ struct MacroBoard {
 }
 
 impl MacroBoard {
-    fn execute_script(&self, path: &Path) -> io::Result<()> {
+    fn execute_script(&self, working_dir: &Path, path: &Path) -> io::Result<()> {
         eprintln!("Running macro: {path}", path = path.display());
 
         let old_euid = users::get_effective_uid();
@@ -51,7 +51,10 @@ impl MacroBoard {
         users::switch::set_effective_uid(users::get_current_uid())?;
         users::switch::set_effective_gid(users::get_current_gid())?;
 
-        let result = Command::new(path).stdin(Stdio::null()).spawn();
+        let result = Command::new(path)
+            .stdin(Stdio::null())
+            .current_dir(working_dir)
+            .spawn();
 
         users::switch::set_effective_uid(old_euid).unwrap();
         users::switch::set_effective_gid(old_egid).unwrap();
@@ -64,7 +67,6 @@ impl MacroBoard {
                 // See: https://doc.rust-lang.org/std/process/struct.Child.html
                 child.wait().ok();
             });
-            ()
         })
     }
 
@@ -73,7 +75,7 @@ impl MacroBoard {
             .map(|s| s.to_string_lossy().to_string())
             .ok_or("User no longer exists!")?;
         let config_path = PathBuf::from(format!("/home/{username}/.config/evdev-macros/"));
-        let entries: Vec<_> = std::fs::read_dir(config_path)?
+        let entries: Vec<_> = std::fs::read_dir(&config_path)?
             .filter_map(|entry| {
                 if let Ok(entry) = entry {
                     if entry.path().file_stem().and_then(|s| s.to_str()) == Some(macro_name) {
@@ -84,7 +86,8 @@ impl MacroBoard {
             })
             .collect();
         for entry in entries {
-            self.execute_script(&*entry.path()).and(Ok(()))?
+            self.execute_script(&config_path, &entry.path())
+                .and(Ok(()))?
         }
 
         Ok(())
@@ -136,13 +139,13 @@ fn main() {
     let (sender, receiver) = crossbeam_channel::unbounded();
     let mut board = MacroBoard {
         receiver,
-        vendor: 0xa5c,
-        product: 0x4502,
+        vendor: 0x413c,
+        product: 0x2011,
         quit: false,
     };
 
     for (_path, device) in evdev::enumerate() {
-        // println!("{}, {}", path.to_string_lossy(), device);
+        // println!("{}, {}", _path.to_string_lossy(), device);
         let ids = device.input_id();
         let supports_esc = device
             .supported_keys()
